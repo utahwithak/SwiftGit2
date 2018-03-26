@@ -70,7 +70,7 @@ public struct Diff {
 		}
 		public let rawValue: UInt32
 
-		public static let current                = Status(rawValue: GIT_STATUS_CURRENT)
+		public static let current                = Status(rawValue: GIT_STATUS_CURRENT.rawValue)
 		public static let indexNew               = Status(rawValue: GIT_STATUS_INDEX_NEW.rawValue)
 		public static let indexModified          = Status(rawValue: GIT_STATUS_INDEX_MODIFIED.rawValue)
 		public static let indexDeleted           = Status(rawValue: GIT_STATUS_INDEX_DELETED.rawValue)
