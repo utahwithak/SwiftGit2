@@ -6,10 +6,11 @@
 //  Copyright (c) 2014 GitHub, Inc. All rights reserved.
 //
 
-import Result
 import SwiftGit2
 import Nimble
 import Quick
+
+// swiftlint:disable cyclomatic_complexity
 
 class RepositorySpec: QuickSpec {
 	override func spec() {
@@ -23,7 +24,47 @@ class RepositorySpec: QuickSpec {
 				let url = URL(fileURLWithPath: "blah")
 				let result = Repository.at(url)
 				expect(result.error?.domain) == libGit2ErrorDomain
-				expect(result.error?.localizedDescription).to(match("Failed to resolve path"))
+				expect(result.error?.localizedDescription).to(match("failed to resolve path"))
+			}
+		}
+
+		describe("Repository.Type.isValid(url:)") {
+			it("should return true if the repo exists") {
+				guard let repositoryURL = Fixtures.simpleRepository.directoryURL else {
+					fail("Fixture setup broken: Repository does not exist"); return
+				}
+
+				let result = Repository.isValid(url: repositoryURL)
+
+				expect(result.error).to(beNil())
+
+				if case .success(let isValid) = result {
+					expect(isValid).to(beTruthy())
+				}
+			}
+
+			it("should return false if the directory does not contain a repo") {
+				let tmpURL = URL(fileURLWithPath: "/dev/null")
+				let result = Repository.isValid(url: tmpURL)
+
+				expect(result.error).to(beNil())
+
+				if case .success(let isValid) = result {
+					expect(isValid).to(beFalsy())
+				}
+			}
+
+			it("should return error if .git is not readable") {
+				let localURL = self.temporaryURL(forPurpose: "git-isValid-unreadable").appendingPathComponent(".git")
+				let nonReadablePermissions: [FileAttributeKey: Any] = [.posixPermissions: 0o077]
+				try! FileManager.default.createDirectory(
+					at: localURL,
+					withIntermediateDirectories: true,
+					attributes: nonReadablePermissions)
+				let result = Repository.isValid(url: localURL)
+
+				expect(result.value).to(beNil())
+				expect(result.error).notTo(beNil())
 			}
 		}
 
@@ -111,9 +152,9 @@ class RepositorySpec: QuickSpec {
 					let remoteRepoURL = URL(string: privateRepo)
 					let localURL = self.temporaryURL(forPurpose: "private-remote-clone")
 					let credentials = Credentials.sshMemory(username: gitUsername,
-						publicKey: publicKey,
-						privateKey: privateKey,
-						passphrase: passphrase)
+					                                        publicKey: publicKey,
+					                                        privateKey: privateKey,
+					                                        passphrase: passphrase)
 
 					let cloneResult = Repository.clone(from: remoteRepoURL!, to: localURL, credentials: credentials)
 
@@ -646,10 +687,85 @@ class RepositorySpec: QuickSpec {
 			}
 		}
 
+		describe("Repository.add") {
+			it("Should add the modification under a path") {
+				let repo = Fixtures.simpleRepository
+				let branch = repo.localBranch(named: "master").value!
+				expect(repo.checkout(branch, strategy: CheckoutStrategy.None).error).to(beNil())
+
+				// make a change to README
+				let readmeURL = repo.directoryURL!.appendingPathComponent("README.md")
+				let readmeData = try! Data(contentsOf: readmeURL)
+				defer { try! readmeData.write(to: readmeURL) }
+
+				try! "different".data(using: .utf8)?.write(to: readmeURL)
+
+				let status = repo.status()
+				expect(status.value?.count).to(equal(1))
+				expect(status.value!.first!.status).to(equal(.workTreeModified))
+
+				expect(repo.add(path: "README.md").error).to(beNil())
+
+				let newStatus = repo.status()
+				expect(newStatus.value?.count).to(equal(1))
+				expect(newStatus.value!.first!.status).to(equal(.indexModified))
+			}
+
+			it("Should add an untracked file under a path") {
+				let repo = Fixtures.simpleRepository
+				let branch = repo.localBranch(named: "master").value!
+				expect(repo.checkout(branch, strategy: CheckoutStrategy.None).error).to(beNil())
+
+				// make a change to README
+				let untrackedURL = repo.directoryURL!.appendingPathComponent("untracked")
+				try! "different".data(using: .utf8)?.write(to: untrackedURL)
+				defer { try! FileManager.default.removeItem(at: untrackedURL) }
+
+				expect(repo.add(path: ".").error).to(beNil())
+
+				let newStatus = repo.status()
+				expect(newStatus.value?.count).to(equal(1))
+				expect(newStatus.value!.first!.status).to(equal(.indexNew))
+			}
+		}
+
+		describe("Repository.commit") {
+			it("Should perform a simple commit with specified signature") {
+				let repo = Fixtures.simpleRepository
+				let branch = repo.localBranch(named: "master").value!
+				expect(repo.checkout(branch, strategy: CheckoutStrategy.None).error).to(beNil())
+
+				// make a change to README
+				let untrackedURL = repo.directoryURL!.appendingPathComponent("untrackedtest")
+				try! "different".data(using: .utf8)?.write(to: untrackedURL)
+
+				expect(repo.add(path: ".").error).to(beNil())
+
+				let signature = Signature(
+					name: "swiftgit2",
+					email: "foobar@example.com",
+					time: Date(timeIntervalSince1970: 1525200858),
+					timeZone: TimeZone(secondsFromGMT: 3600)!
+				)
+				let message = "Test Commit"
+				expect(repo.commit(message: message, signature: signature).error).to(beNil())
+				let updatedBranch = repo.localBranch(named: "master").value!
+				expect(repo.commits(in: updatedBranch).next()?.value?.author).to(equal(signature))
+				expect(repo.commits(in: updatedBranch).next()?.value?.committer).to(equal(signature))
+				expect(repo.commits(in: updatedBranch).next()?.value?.message).to(equal("\(message)\n"))
+				expect(repo.commits(in: updatedBranch).next()?.value?.oid.description)
+					.to(equal("7d6b2d7492f29aee48022387f96dbfe996d435fe"))
+
+				// should be clean now
+				let newStatus = repo.status()
+				expect(newStatus.value?.count).to(equal(0))
+			}
+		}
+
 		describe("Repository.status") {
 			it("Should accurately report status for repositories with no status") {
 				let expectedCount = 0
-				
+
 				let repo = Fixtures.mantleRepository
 				let branch = repo.localBranch(named: "master").value!
 				expect(repo.checkout(branch, strategy: CheckoutStrategy.None).error).to(beNil())
